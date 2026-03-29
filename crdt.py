@@ -1,71 +1,168 @@
 #!/usr/bin/env python3
-"""crdt - Conflict-free Replicated Data Types."""
-import argparse
+"""crdt - Conflict-free replicated data types."""
+import sys, time
 
 class GCounter:
-    def __init__(self, node_id, n_nodes=3):
-        self.id=node_id;self.counts=[0]*n_nodes
-    def increment(self,n=1): self.counts[self.id]+=n
-    def value(self): return sum(self.counts)
+    """Grow-only counter."""
+    def __init__(self, node_id):
+        self.id = node_id
+        self.counts = {}
+    
+    def increment(self, n=1):
+        self.counts[self.id] = self.counts.get(self.id, 0) + n
+    
+    def value(self):
+        return sum(self.counts.values())
+    
     def merge(self, other):
-        for i in range(len(self.counts)): self.counts[i]=max(self.counts[i],other.counts[i])
+        result = GCounter(self.id)
+        all_keys = set(self.counts) | set(other.counts)
+        for k in all_keys:
+            result.counts[k] = max(self.counts.get(k, 0), other.counts.get(k, 0))
+        return result
 
 class PNCounter:
-    def __init__(self,nid,n=3): self.p=GCounter(nid,n);self.n=GCounter(nid,n)
-    def increment(self,v=1): self.p.increment(v)
-    def decrement(self,v=1): self.n.increment(v)
-    def value(self): return self.p.value()-self.n.value()
-    def merge(self,o): self.p.merge(o.p);self.n.merge(o.n)
+    """Positive-Negative counter."""
+    def __init__(self, node_id):
+        self.p = GCounter(node_id)
+        self.n = GCounter(node_id)
+    
+    def increment(self, n=1):
+        self.p.increment(n)
+    
+    def decrement(self, n=1):
+        self.n.increment(n)
+    
+    def value(self):
+        return self.p.value() - self.n.value()
+    
+    def merge(self, other):
+        result = PNCounter(self.p.id)
+        result.p = self.p.merge(other.p)
+        result.n = self.n.merge(other.n)
+        return result
 
-class LWWRegister:
-    def __init__(self): self.value=None;self.ts=0
-    def set(self,v,ts): 
-        if ts>self.ts: self.value=v;self.ts=ts
-    def merge(self,o):
-        if o.ts>self.ts: self.value=o.value;self.ts=o.ts
+class GSet:
+    """Grow-only set."""
+    def __init__(self):
+        self.elements = set()
+    
+    def add(self, elem):
+        self.elements.add(elem)
+    
+    def contains(self, elem):
+        return elem in self.elements
+    
+    def merge(self, other):
+        result = GSet()
+        result.elements = self.elements | other.elements
+        return result
 
 class ORSet:
-    def __init__(self): self.adds={};self.removes=set();self._tag=0
-    def add(self,elem):
-        self._tag+=1;tag=f"t{self._tag}"
-        self.adds.setdefault(elem,set()).add(tag)
-    def remove(self,elem):
-        if elem in self.adds: self.removes|=self.adds[elem];del self.adds[elem]
-    def elements(self):
-        result=set()
-        for elem,tags in self.adds.items():
-            if tags-self.removes: result.add(elem)
+    """Observed-Remove set."""
+    def __init__(self, node_id):
+        self.id = node_id
+        self.elements = {}  # elem -> set of (node_id, counter)
+        self.tombstones = {}  # elem -> set of (node_id, counter)
+        self.counter = 0
+    
+    def add(self, elem):
+        self.counter += 1
+        tag = (self.id, self.counter)
+        if elem not in self.elements:
+            self.elements[elem] = set()
+        self.elements[elem].add(tag)
+    
+    def remove(self, elem):
+        if elem in self.elements:
+            if elem not in self.tombstones:
+                self.tombstones[elem] = set()
+            self.tombstones[elem] |= self.elements[elem]
+            del self.elements[elem]
+    
+    def contains(self, elem):
+        if elem not in self.elements:
+            return False
+        alive = self.elements[elem] - self.tombstones.get(elem, set())
+        return len(alive) > 0
+    
+    def values(self):
+        return {e for e in self.elements if self.contains(e)}
+    
+    def merge(self, other):
+        result = ORSet(self.id)
+        all_elems = set(self.elements) | set(other.elements)
+        for elem in all_elems:
+            tags = self.elements.get(elem, set()) | other.elements.get(elem, set())
+            tombs = self.tombstones.get(elem, set()) | other.tombstones.get(elem, set())
+            alive = tags - tombs
+            if alive:
+                result.elements[elem] = alive
+            result.tombstones[elem] = tombs
         return result
-    def merge(self,o):
-        for elem,tags in o.adds.items():
-            self.adds.setdefault(elem,set()).update(tags)
-        self.removes|=o.removes
 
-def main():
-    p=argparse.ArgumentParser(description="CRDT types")
-    p.add_argument("--type",choices=["gcounter","pncounter","lww","orset"],default="gcounter")
-    args=p.parse_args()
-    if args.type=="gcounter":
-        a,b=GCounter(0),GCounter(1)
-        a.increment(3);b.increment(5);a.increment(2)
-        print(f"Node A: {a.value()}, Node B: {b.value()}")
-        a.merge(b);b.merge(a)
-        print(f"After merge: A={a.value()}, B={b.value()}")
-    elif args.type=="pncounter":
-        a,b=PNCounter(0),PNCounter(1)
-        a.increment(10);b.increment(5);a.decrement(3);b.decrement(2)
-        a.merge(b);b.merge(a)
-        print(f"PN-Counter after merge: A={a.value()}, B={b.value()}")
-    elif args.type=="lww":
-        a,b=LWWRegister(),LWWRegister()
-        a.set("hello",1);b.set("world",2);a.set("foo",3)
-        a.merge(b);b.merge(a)
-        print(f"LWW after merge: A={a.value}, B={b.value}")
+class LWWRegister:
+    """Last-Writer-Wins register."""
+    def __init__(self, value=None, ts=0):
+        self.value = value
+        self.ts = ts
+    
+    def set(self, value, ts=None):
+        ts = ts or time.time()
+        if ts > self.ts:
+            self.value = value
+            self.ts = ts
+    
+    def merge(self, other):
+        if other.ts > self.ts:
+            return LWWRegister(other.value, other.ts)
+        return LWWRegister(self.value, self.ts)
+
+def test():
+    # GCounter
+    c1 = GCounter("a")
+    c2 = GCounter("b")
+    c1.increment(3)
+    c2.increment(5)
+    merged = c1.merge(c2)
+    assert merged.value() == 8
+    
+    # PNCounter
+    pn1 = PNCounter("a")
+    pn2 = PNCounter("b")
+    pn1.increment(10)
+    pn2.decrement(3)
+    merged = pn1.merge(pn2)
+    assert merged.value() == 7
+    
+    # GSet
+    s1, s2 = GSet(), GSet()
+    s1.add("x"); s1.add("y")
+    s2.add("y"); s2.add("z")
+    merged = s1.merge(s2)
+    assert merged.elements == {"x", "y", "z"}
+    
+    # ORSet
+    os1 = ORSet("a")
+    os2 = ORSet("b")
+    os1.add("x"); os1.add("y")
+    os2.add("y"); os2.add("z")
+    os1.remove("y")
+    merged = os1.merge(os2)
+    # y was removed by os1 but added by os2 — os2's add wins (concurrent)
+    assert "z" in merged.values()
+    assert "x" in merged.values()
+    
+    # LWWRegister
+    r1 = LWWRegister("old", 1)
+    r2 = LWWRegister("new", 2)
+    merged = r1.merge(r2)
+    assert merged.value == "new"
+    
+    print("All tests passed!")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        test()
     else:
-        a,b=ORSet(),ORSet()
-        a.add("x");a.add("y");b.add("y");b.add("z")
-        a.remove("y")
-        a.merge(b);print(f"OR-Set A after merge: {a.elements()}")
-
-if __name__=="__main__":
-    main()
+        print("Usage: crdt.py test")

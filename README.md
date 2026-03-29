@@ -1,19 +1,9 @@
-# CRDT Types
+# crdt
 
-Conflict-free replicated data types: G-Counter, PN-Counter, OR-Set, LWW-Register
-
-## Usage
+CRDTs: GCounter, PNCounter, GSet, ORSet, LWW Register with merge
 
 ```bash
-python3 crdt.py --help
+python3 crdt.py test
 ```
 
-## Features
-
-- Zero dependencies (Python 3.8+ stdlib only)
-- Single file
-- CLI interface
-
-## License
-
-MIT
+Zero deps. Python 3.8+.
