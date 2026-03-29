@@ -1,9 +1,11 @@
 # crdt
 
-CRDTs: GCounter, PNCounter, GSet, ORSet, LWW Register with merge
+Conflict-free Replicated Data Types (G-Counter, PN-Counter, OR-Set).
+
+## Usage
 
 ```bash
 python3 crdt.py test
 ```
 
-Zero deps. Python 3.8+.
+Zero dependencies. Python 3.8+.
