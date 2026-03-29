@@ -1,11 +1,10 @@
 # crdt
 
-Conflict-free Replicated Data Types (G-Counter, PN-Counter, OR-Set).
+Single-file Python CLI. Zero dependencies.
 
 ## Usage
 
 ```bash
+python3 crdt.py
 python3 crdt.py test
 ```
-
-Zero dependencies. Python 3.8+.

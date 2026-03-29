@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""crdt - Conflict-free Replicated Data Types (G-Counter, PN-Counter, OR-Set)."""
+"""CRDTs — conflict-free replicated data types."""
 import sys
 
 class GCounter:
-    def __init__(self, node_id, nodes):
+    def __init__(self, node_id, n_nodes):
         self.node_id = node_id
-        self.counts = {n: 0 for n in nodes}
+        self.counts = [0] * n_nodes
     def increment(self, amount=1):
         self.counts[self.node_id] += amount
     def value(self):
-        return sum(self.counts.values())
+        return sum(self.counts)
     def merge(self, other):
-        for n in self.counts:
-            self.counts[n] = max(self.counts[n], other.counts.get(n, 0))
+        for i in range(len(self.counts)):
+            self.counts[i] = max(self.counts[i], other.counts[i])
 
 class PNCounter:
-    def __init__(self, node_id, nodes):
-        self.p = GCounter(node_id, nodes)
-        self.n = GCounter(node_id, nodes)
+    def __init__(self, node_id, n_nodes):
+        self.p = GCounter(node_id, n_nodes)
+        self.n = GCounter(node_id, n_nodes)
     def increment(self, amount=1):
         self.p.increment(amount)
     def decrement(self, amount=1):
@@ -40,59 +40,40 @@ class GSet:
     def value(self):
         return frozenset(self.elements)
 
-class ORSet:
-    def __init__(self, node_id):
-        self.node_id = node_id
-        self.elements = {}  # elem -> set of (node, counter)
-        self.counter = 0
-    def add(self, elem):
-        self.counter += 1
-        tag = (self.node_id, self.counter)
-        if elem not in self.elements:
-            self.elements[elem] = set()
-        self.elements[elem].add(tag)
-    def remove(self, elem):
-        self.elements.pop(elem, None)
-    def contains(self, elem):
-        return elem in self.elements and len(self.elements[elem]) > 0
-    def value(self):
-        return {e for e, tags in self.elements.items() if tags}
+class LWWRegister:
+    def __init__(self):
+        self.value_ = None
+        self.timestamp = 0
+    def set(self, value, timestamp):
+        if timestamp > self.timestamp:
+            self.value_ = value
+            self.timestamp = timestamp
+    def get(self):
+        return self.value_
     def merge(self, other):
-        all_elems = set(self.elements) | set(other.elements)
-        for elem in all_elems:
-            mine = self.elements.get(elem, set())
-            theirs = other.elements.get(elem, set())
-            self.elements[elem] = mine | theirs
+        if other.timestamp > self.timestamp:
+            self.value_ = other.value_
+            self.timestamp = other.timestamp
 
 def test():
-    nodes = ["A", "B"]
-    a = GCounter("A", nodes)
-    b = GCounter("B", nodes)
-    a.increment(3)
-    b.increment(5)
+    a = GCounter(0, 3); b = GCounter(1, 3)
+    a.increment(5); b.increment(3)
     a.merge(b)
     assert a.value() == 8
-    # PN-Counter
-    pa = PNCounter("A", nodes)
-    pb = PNCounter("B", nodes)
-    pa.increment(10)
-    pb.decrement(3)
-    pa.merge(pb)
-    assert pa.value() == 7
-    # OR-Set
-    sa = ORSet("A")
-    sb = ORSet("B")
-    sa.add("x")
-    sb.add("y")
-    sa.merge(sb)
-    assert sa.value() == {"x", "y"}
-    sa.remove("x")
-    assert not sa.contains("x")
-    assert sa.contains("y")
-    print("OK: crdt")
+    pn1 = PNCounter(0, 2); pn2 = PNCounter(1, 2)
+    pn1.increment(10); pn2.decrement(3)
+    pn1.merge(pn2)
+    assert pn1.value() == 7
+    s1 = GSet(); s2 = GSet()
+    s1.add("a"); s1.add("b"); s2.add("b"); s2.add("c")
+    s1.merge(s2)
+    assert s1.value() == frozenset({"a", "b", "c"})
+    r1 = LWWRegister(); r2 = LWWRegister()
+    r1.set("old", 1); r2.set("new", 2)
+    r1.merge(r2)
+    assert r1.get() == "new"
+    print("  crdt: ALL TESTS PASSED")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "test":
-        test()
-    else:
-        print("Usage: crdt.py test")
+    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
+    else: print("CRDTs — conflict-free replicated data types")
